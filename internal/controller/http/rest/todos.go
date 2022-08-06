@@ -1,6 +1,7 @@
 package rest
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -16,75 +17,44 @@ type todosRoutes struct {
 func newTodosRoutes(handler *gin.RouterGroup, usecase *usecase.ToDoUseCase) {
 	r := &todosRoutes{usecase: usecase}
 
-	handler.GET("/", r.getTodos)
-	handler.PUT("/", r.createTodo)
-	handler.PATCH("/:id/*action", r.updateTodo)
-}
-
-type getTodosParams struct {
-	Offset int `form:"offset" json:"offset"`
-	Size   int `form:"size" json:"size"`
+	handler.GET("/", validateGetTodos(), r.getTodos)
+	handler.PUT("/", validateCreateTodo(), r.createTodo)
+	handler.PATCH("/:id/*action", validateUpdateTodo(), r.updateTodo)
 }
 
 func (r *todosRoutes) getTodos(ctx *gin.Context) {
 	var params getTodosParams
-	if err := ctx.BindQuery(&params); err != nil {
-		ctx.AbortWithError(http.StatusBadRequest, err)
-		return
-	}
+	ctx.BindQuery(&params)
 	result, err := r.usecase.Get(ctx.Request.Context(), params.Offset, params.Size)
 	if err != nil {
-		errorResponse(ctx, http.StatusNotFound, "there is no todos")
+		ctx.AbortWithError(http.StatusNotFound, errors.New("there is no todos"))
 		return
 	}
 	ctx.IndentedJSON(http.StatusOK, result)
 }
 
 func (r *todosRoutes) createTodo(ctx *gin.Context) {
-	entity := &entity.ToDoItem{}
-	if err := ctx.BindJSON(entity); err != nil {
-		errorResponse(ctx, http.StatusBadRequest, "wrong body data")
-		return
-	}
-	id, _ := r.usecase.Create(ctx.Request.Context(), *entity)
+	var entity entity.ToDoItem
+	id, _ := r.usecase.Create(ctx.Request.Context(), entity)
 	ctx.IndentedJSON(http.StatusCreated, gin.H{"id": id})
 }
 
-type updateAction uint
-
-func (a updateAction) ToString() string {
-	switch a {
-	case done:
-		return "/done"
-	case delete:
-		return "/delete"
-	}
-	return "unknown"
-}
-
-const (
-	done updateAction = iota
-	delete
-)
-
 func (r *todosRoutes) updateTodo(ctx *gin.Context) {
-	action := ctx.Param("action")
+	action := updateAction(ctx.Param("action"))
 	switch action {
-	case done.ToString():
+	case done:
 		r.markTodoDone(ctx)
-	case delete.ToString():
+	case delete:
 		r.markTodoDeleted(ctx)
-	default:
-		errorResponse(ctx, http.StatusBadRequest, action+" action is not supported")
 	}
 }
 
 func (r *todosRoutes) markTodoDeleted(ctx *gin.Context) {
-	param, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	param, _ := strconv.ParseUint(ctx.Param("id"), 10, 32)
 	id := entity.ToDoItemId(param)
-	err = r.usecase.MarkDeleted(ctx.Request.Context(), id)
+	err := r.usecase.MarkDeleted(ctx.Request.Context(), id)
 	if err != nil {
-		errorResponse(ctx, http.StatusBadRequest, "bad request")
+		ctx.AbortWithError(http.StatusBadRequest, err)
 		return
 	}
 	ctx.IndentedJSON(http.StatusOK, gin.H{
@@ -93,11 +63,11 @@ func (r *todosRoutes) markTodoDeleted(ctx *gin.Context) {
 }
 
 func (r *todosRoutes) markTodoDone(ctx *gin.Context) {
-	param, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	param, _ := strconv.ParseUint(ctx.Param("id"), 10, 32)
 	id := entity.ToDoItemId(param)
-	id, err = r.usecase.MarkDone(ctx.Request.Context(), id)
+	id, err := r.usecase.MarkDone(ctx.Request.Context(), id)
 	if err != nil {
-		errorResponse(ctx, http.StatusNotFound, "not found")
+		ctx.AbortWithError(http.StatusNotFound, err)
 		return
 	}
 	ctx.IndentedJSON(http.StatusOK, gin.H{
